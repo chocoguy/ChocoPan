@@ -6,8 +6,15 @@
 	objectVersion = 110;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		F270E81D305B75B500DF2918 /* ChocoPan.icon in Resources */ = {isa = PBXBuildFile; fileRef = F270E81C305B75B500DF2918 /* ChocoPan.icon */; };
+		F270E820305B7E7B00DF2918 /* AMSMB2 in Frameworks */ = {isa = PBXBuildFile; productRef = F270E81F305B7E7B00DF2918 /* AMSMB2 */; };
+		F2817456305B85550021EBB2 /* MPVKit in Frameworks */ = {isa = PBXBuildFile; productRef = F2817455305B85550021EBB2 /* MPVKit */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		F270E80E305B726300DF2918 /* ChocoPan.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ChocoPan.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		F270E81C305B75B500DF2918 /* ChocoPan.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = ChocoPan.icon; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -22,6 +29,8 @@
 		F270E80B305B726300DF2918 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+				F270E820305B7E7B00DF2918 /* AMSMB2 in Frameworks */,
+				F2817456305B85550021EBB2 /* MPVKit in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -30,6 +39,7 @@
 		F270E805305B726300DF2918 = {
 			isa = PBXGroup;
 			children = (
+				F270E81C305B75B500DF2918 /* ChocoPan.icon */,
 				F270E810305B726300DF2918 /* ChocoPan */,
 				F270E80F305B726300DF2918 /* Products */,
 			);
@@ -60,6 +70,10 @@
 				F270E810305B726300DF2918 /* ChocoPan */,
 			);
 			name = ChocoPan;
+			packageProductDependencies = (
+				F270E81F305B7E7B00DF2918 /* AMSMB2 */,
+				F2817455305B85550021EBB2 /* MPVKit */,
+			);
 			productName = ChocoPan;
 			productReference = F270E80E305B726300DF2918 /* ChocoPan.app */;
 			productType = "com.apple.product-type.application";
@@ -88,6 +102,10 @@
 			);
 			mainGroup = F270E805305B726300DF2918;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				F270E81E305B7E7B00DF2918 /* XCRemoteSwiftPackageReference "AMSMB2" */,
+				F2817454305B85550021EBB2 /* XCRemoteSwiftPackageReference "MPVKit" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = F270E80F305B726300DF2918 /* Products */;
 			projectDirPath = "";
@@ -102,6 +120,7 @@
 		F270E80C305B726300DF2918 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
+				F270E81D305B75B500DF2918 /* ChocoPan.icon in Resources */,
 			);
 		};
 /* End PBXResourcesBuildPhase section */
@@ -314,6 +333,38 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		F270E81E305B7E7B00DF2918 /* XCRemoteSwiftPackageReference "AMSMB2" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/amosavian/AMSMB2";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 4.0.3;
+			};
+		};
+		F2817454305B85550021EBB2 /* XCRemoteSwiftPackageReference "MPVKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mpvkit/MPVKit.git";
+			requirement = {
+				kind = exactVersion;
+				version = 1.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		F270E81F305B7E7B00DF2918 /* AMSMB2 */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F270E81E305B7E7B00DF2918 /* XCRemoteSwiftPackageReference "AMSMB2" */;
+			productName = AMSMB2;
+		};
+		F2817455305B85550021EBB2 /* MPVKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = F2817454305B85550021EBB2 /* XCRemoteSwiftPackageReference "MPVKit" */;
+			productName = MPVKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = F270E806305B726300DF2918 /* Project object */;
 	validationLevel = 1;
