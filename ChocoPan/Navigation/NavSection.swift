@@ -17,9 +17,9 @@ enum NavSection: String, CaseIterable, Identifiable {
     
     var systemImage: String {
         switch self {
-        case .lastWatched: "gauge.with.needle.fill"
-        case .library: "tablecells"
-        case .settings: "map"
+        case .lastWatched: "play,house"
+        case .library: "books.vertical"
+        case .settings: "gearshape.2"
         }
     }
     
