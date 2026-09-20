@@ -74,10 +74,15 @@ struct SMBPlayerTestView: View {
         do {
             step = "connecting to \(SMBTestConfig.host)"
             phase = .connecting(step)
-            let session = try SMBSession()
+            let session = try SMBSession(
+                host: SMBTestConfig.host,
+                username: SMBTestConfig.username,
+                password: SMBTestConfig.password,
+                timeout: SMBSession.streamTimeout
+            )
             self.session = session
-            try await session.connect()
-            shares = session.discoveredShares
+            shares = (try? await session.listShares()) ?? []
+            try await session.connect(share: SMBTestConfig.share)
 
             step = "opening \(smbTestFile.title)"
             phase = .connecting(step)

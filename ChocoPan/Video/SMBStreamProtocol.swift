@@ -1,10 +1,6 @@
 import Foundation
 import Libmpv
 
-/// Per-stream state mpv holds via its opaque cookie.
-///
-/// AMSMB2 keeps `SMB2FileHandle` internal, so its only public read is path-based and reopens the file
-/// on every call. The readahead buffer here is what keeps that from being one round trip per read.
 private final class SMBStreamCookie: @unchecked Sendable {
     static let chunkSize = 4 << 20  // 4 MiB
 
@@ -28,6 +24,10 @@ private final class SMBStreamCookie: @unchecked Sendable {
         lock.withLock { isCancelled = true }
     }
 
+    private var cancelled: Bool {
+        lock.withLock { isCancelled }
+    }
+
     /// Returns bytes read, 0 at EOF, or -1 on error — mpv's contract for `read_fn`.
     func read(into destination: UnsafeMutablePointer<CChar>, maxBytes: Int) -> Int64 {
         lock.lock()
@@ -49,8 +49,12 @@ private final class SMBStreamCookie: @unchecked Sendable {
 
         if needsFetch {
             // Network IO stays outside the lock; cancel must remain responsive during a fetch.
-            guard let data = session.readSync(path: path, offset: fetchOffset, length: fetchLength),
-                  !data.isEmpty else {
+            guard let data = session.readSync(
+                path: path,
+                offset: fetchOffset,
+                length: fetchLength,
+                shouldContinue: { [weak self] in self?.cancelled == false }
+            ), !data.isEmpty else {
                 return -1
             }
             lock.withLock {

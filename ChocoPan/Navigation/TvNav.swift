@@ -1,4 +1,5 @@
 import SwiftUI
+import SwiftData
 
 struct TvNav: View {
     var body: some View {
@@ -14,4 +15,5 @@ struct TvNav: View {
 
 #Preview {
     TvNav()
+        .modelContainer(ChocoPanModelContainer.preview)
 }

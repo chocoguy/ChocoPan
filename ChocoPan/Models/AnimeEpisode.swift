@@ -13,12 +13,12 @@ class AnimeEpisode {
     var episodeLengthSeconds: Double
     var thumbnailUnavailable: Bool
     var playbackPositionSeconds: Double
-    var watched: Bool //If playback position at 20 minutes or greater, consider watched
+    var watched: Bool
     var lastPlayedDate: Date
     var playCount: Int
     var dateAdded: Date
-    
-    var anime: Anime
+
+    var anime: Anime?
 
     init(
         animeEpisodeId: UUID = UUID(),
@@ -35,7 +35,7 @@ class AnimeEpisode {
         lastPlayedDate: Date = .distantPast,
         playCount: Int = 0,
         dateAdded: Date = .now,
-        anime: Anime
+        anime: Anime? = nil
     ) {
         self.animeEpisodeId = animeEpisodeId
         self.fileName = fileName

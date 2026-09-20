@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import SwiftData
 
 @main
 struct ChocoPanApp: App {
@@ -13,5 +14,6 @@ struct ChocoPanApp: App {
         WindowGroup {
             ContentView()
         }
+        .modelContainer(ChocoPanModelContainer.shared)
     }
 }

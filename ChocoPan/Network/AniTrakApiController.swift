@@ -3,7 +3,7 @@ import Foundation
 
 
 
-struct AnimeSearchResult: Identifiable, Hashable, Sendable {
+nonisolated struct AnimeSearchResult: Identifiable, Hashable, Sendable {
     let id: Int
     let apiId: Int
     let malId: Int
@@ -31,32 +31,32 @@ struct AnimeSearchResult: Identifiable, Hashable, Sendable {
     }
 }
 
-struct APISeason: Decodable {
+nonisolated struct APISeason: Decodable {
     let seasonId: Int
     let name: String
 }
 
-struct APIMediaType: Decodable {
+nonisolated struct APIMediaType: Decodable {
     let mediaTypeId: Int
     let name: String
 }
 
-struct APIAirDay: Decodable {
+nonisolated struct APIAirDay: Decodable {
     let airDayId: Int?
     let name: String
 }
 
-struct APIOriginalSource: Decodable {
+nonisolated struct APIOriginalSource: Decodable {
     let originalSourceId: Int
     let name: String
 }
 
-struct APINSFW: Decodable {
+nonisolated struct APINSFW: Decodable {
     let nsfwId: Int
     let name: String
 }
 
-struct APIAnime: Decodable {
+nonisolated struct APIAnime: Decodable {
     let animeId: Int
     let malId: Int
     let title: String
@@ -92,7 +92,7 @@ struct APIAnime: Decodable {
 
 
 
-struct AnimeRecommendation: Identifiable, Hashable, Sendable, Decodable {
+nonisolated struct AnimeRecommendation: Identifiable, Hashable, Sendable, Decodable {
     let malId: Int
     let title: String
     let poster: String?
@@ -100,7 +100,7 @@ struct AnimeRecommendation: Identifiable, Hashable, Sendable, Decodable {
     var id: Int { malId }
 }
 
-struct AnimeRelated: Identifiable, Hashable, Sendable, Decodable {
+nonisolated struct AnimeRelated: Identifiable, Hashable, Sendable, Decodable {
     let malId: Int
     let title: String
     let poster: String?
@@ -114,6 +114,7 @@ struct AnimeRelated: Identifiable, Hashable, Sendable, Decodable {
 actor AniTrakApiController {
     static let shared = AniTrakApiController()
     private let baseURL = URL(string: "https://vanillacoffeesoft.net/api/AniTrak/")!
+    private static let syncPassword = "supersecretlacroixrangersixseven"
     private let decoder: JSONDecoder
     
     private init() {
@@ -135,7 +136,7 @@ actor AniTrakApiController {
     private nonisolated(unsafe) static let isoFormatter = ISO8601DateFormatter()
 
     // onAir/offAir/lastModified: "2018-01-07T00:00:00" (no timezone — treated as UTC)
-    private nonisolated(unsafe) static let dateTimeFormatter: DateFormatter = {
+    private static let dateTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
@@ -144,7 +145,7 @@ actor AniTrakApiController {
     }()
 
     // "2018-01-07"
-    private nonisolated(unsafe) static let dateOnlyFormatter: DateFormatter = {
+    private static let dateOnlyFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
@@ -232,7 +233,7 @@ actor AniTrakApiController {
         guard var components = URLComponents(url: baseURL.appendingPathComponent("anime/search"), resolvingAgainstBaseURL: true) else {
             throw URLError(.badURL)
         }
-        components.queryItems = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "password", value: "supersecretlacroixrangersixseven")]
+        components.queryItems = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "password", value: Self.syncPassword)]
         
         guard let url = components.url else {
             throw URLError(.badURL)
@@ -249,11 +250,11 @@ actor AniTrakApiController {
     }
     
     
-    func searchForceMal(query: String) async throws -> [AnimeSearchResult] {
-        guard var components = URLComponents(url: baseURL.appendingPathComponent("anime/search/forcemal"), resolvingAgainstBaseURL: true) else {
+    func searchForceWeb(query: String) async throws -> [AnimeSearchResult] {
+        guard var components = URLComponents(url: baseURL.appendingPathComponent("anime/search/forceweb"), resolvingAgainstBaseURL: true) else {
             throw URLError(.badURL)
         }
-        components.queryItems = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "password", value: "supersecretlacroixrangersixseven")]
+        components.queryItems = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "password", value: Self.syncPassword)]
         
         guard let url = components.url else {
             throw URLError(.badURL)
@@ -298,110 +299,79 @@ actor AniTrakApiController {
     }
     
 
-    
-    //This runs second, now that the server has synced the records, we take the ApiAnime record and convert it to a SwiftData Anime Record
-    /// `folderPath`/`folderName` are local concerns the API knows nothing about. A caller that has
-    /// already matched this anime to a folder on disk passes them; a plain metadata import leaves
-    /// them empty for the scanner to fill in later.
-    func importAnime(
-        from apiAnime: APIAnime,
-        into context: ModelContext,
-        folderPath: String = "",
-        folderName: String = ""
-    ) throws -> Anime {
 
-        // Upsert on malId: it is the only stable API-side key the local model carries. A malId of 0
-        // means the server has no MAL match, so there is nothing to match on and this is always new.
-        let malAnimeId: Int? = apiAnime.malId != 0 ? apiAnime.malId : nil
 
-        if let malAnimeId {
-            var existingDescriptor = FetchDescriptor<Anime>(
-                predicate: #Predicate { $0.malId == malAnimeId }
-            )
-            existingDescriptor.fetchLimit = 1
-
-            if let existing = try? context.fetch(existingDescriptor).first {
-                // Refresh the API-owned fields and leave everything local alone — folder, poster
-                // cache, track preferences, source and dateAdded all survive a re-sync.
-                apply(apiAnime, to: existing)
-                return existing
-            }
-        }
-
-        let localAnime = Anime(
-            folderPath: folderPath,
-            folderName: folderName,
-            malId: malAnimeId,
-            title: apiAnime.title,
-            titleShort: apiAnime.titleShort,
-            titleRomanized: apiAnime.titleRomanized,
-            titleKana: apiAnime.titleKana,
-            shownTitle: apiAnime.titleShort ?? apiAnime.title,
-            year: apiAnime.year,
-            episodes: apiAnime.episodeCount,
-            IsLinkedToMal: malAnimeId != nil,
-            seasonName: apiAnime.season?.name ?? "unknown",
-            mediaTypeName: apiAnime.mediaType?.name ?? "unknown",
-            tags: apiAnime.tags ?? [],
-            studios: apiAnime.studios ?? [],
-            synopsis: apiAnime.synopsis,
-            posterURL: apiAnime.poster
-        )
-
-        context.insert(localAnime)
-        return localAnime
-    }
-
-    /// Copies the fields the API owns onto an existing record.
-    private func apply(_ apiAnime: APIAnime, to anime: Anime) {
-        let malAnimeId: Int? = apiAnime.malId != 0 ? apiAnime.malId : nil
-
-        anime.malId = malAnimeId
-        anime.IsLinkedToMal = malAnimeId != nil
-        anime.title = apiAnime.title
-        anime.titleShort = apiAnime.titleShort
-        anime.titleRomanized = apiAnime.titleRomanized
-        anime.titleKana = apiAnime.titleKana
-        anime.year = apiAnime.year
-        anime.episodes = apiAnime.episodeCount
-        anime.seasonName = apiAnime.season?.name ?? "unknown"
-        anime.mediaTypeName = apiAnime.mediaType?.name ?? "unknown"
-        anime.tags = apiAnime.tags ?? []
-        anime.studios = apiAnime.studios ?? []
-        anime.synopsis = apiAnime.synopsis
-        anime.posterURL = apiAnime.poster
-    }
-    
-
-    
-    //This runs first, From the list of the "search" and "searchForceMal" we take the id of the desired record and feed it to this method
-    func importAnime(by apiId: Int, into context: ModelContext) async throws -> Anime {
-        
-        
-        guard var components = URLComponents(url: baseURL.appendingPathComponent("anime/\(apiId)/sync"), resolvingAgainstBaseURL: true) else {
+    func searchBatch(titles: [String]) async throws -> BatchAnimeSearchResponse {
+        precondition(titles.count <= Self.batchLimit, "batch is capped at \(Self.batchLimit) titles")
+        guard !titles.isEmpty else {
             throw URLError(.badURL)
         }
-        components.queryItems = [URLQueryItem(name: "password", value: "supersecretlacroixrangersixseven")]
-        
+
+        guard var components = URLComponents(
+            url: baseURL.appendingPathComponent("anime/search/batch"),
+            resolvingAgainstBaseURL: true
+        ) else {
+            throw URLError(.badURL)
+        }
+        components.queryItems = [URLQueryItem(name: "password", value: Self.syncPassword)]
+
         guard let url = components.url else {
             throw URLError(.badURL)
         }
-        
-        let (data, response) = try await URLSession.shared.data(from: url)
-        
-        if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
-            throw URLError(.badServerResponse)
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(BatchAnimeSearchRequest(titles: titles))
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        if let httpResponse = response as? HTTPURLResponse,
+           !(200...299).contains(httpResponse.statusCode) {
+            throw AniTrakApiError(statusCode: httpResponse.statusCode)
         }
 
-        // The /sync route just returns the synced anime's id as an integer.
-        let syncedId = try JSONDecoder().decode(Int.self, from: data)
-        let apiAnime = try await fetchAnime(by: syncedId)
-        
+        return try decoder.decode(BatchAnimeSearchResponse.self, from: data)
+    }
 
+    static let batchLimit = 100
 
-        let local = try importAnime(from: apiAnime, into: context)
-        try context.save()
-        return local
+    func syncAnime(malId: Int) async throws -> Int {
+        guard var components = URLComponents(
+            url: baseURL.appendingPathComponent("anime/\(malId)/sync"),
+            resolvingAgainstBaseURL: true
+        ) else {
+            throw URLError(.badURL)
+        }
+        components.queryItems = [URLQueryItem(name: "password", value: Self.syncPassword)]
+
+        guard let url = components.url else {
+            throw URLError(.badURL)
+        }
+
+        let (data, response) = try await URLSession.shared.data(from: url)
+
+        if let httpResponse = response as? HTTPURLResponse,
+           !(200...299).contains(httpResponse.statusCode) {
+            throw AniTrakApiError(statusCode: httpResponse.statusCode)
+        }
+
+        return try JSONDecoder().decode(Int.self, from: data)
     }
 }
 
+nonisolated struct AniTrakApiError: Error, CustomStringConvertible {
+    let statusCode: Int
+
+    var isUnauthorized: Bool { statusCode == 401 }
+    var isRateLimited: Bool { statusCode == 429 }
+
+    var description: String {
+        switch statusCode {
+        case 401: "the API rejected the sync password"
+        case 429: "too many requests — the API allows 60 per minute"
+        case 500...599: "the metadata server had an error (\(statusCode))"
+        default: "the metadata server returned \(statusCode)"
+        }
+    }
+}
