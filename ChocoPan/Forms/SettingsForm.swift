@@ -4,8 +4,12 @@ import SwiftUI
 struct SettingsForm: View {
     @Environment(\.modelContext) private var context
     @Query private var librarySources: [LibrarySource]
+    @Query private var anime: [Anime]
+    @Query private var settingsRecords: [ChocoPanSettings]
 
     @State private var isConfirmingRemoval = false
+    @State private var refresher = ImageCacheRefresher()
+    @State private var cacheStatistics = CacheStatistics(fileCount: 0, byteCount: 0)
 
     private let navigation = LibraryNavigation.shared
 
@@ -46,11 +50,7 @@ struct SettingsForm: View {
                     .font(.largeTitle)
                     .fontWeight(.semibold)
 
-                VStack(alignment: .leading, spacing: 20) {
-                    Text("Library Source")
-                        .font(.title3)
-                        .fontWeight(.semibold)
-
+                SettingsCard(title: "Library Source") {
                     VStack(alignment: .leading, spacing: 8) {
                         Label(
                             "\(source.host ?? "unknown") · \(source.share)",
@@ -70,15 +70,25 @@ struct SettingsForm: View {
                         }
                     }
                 }
-                .padding(32)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.regularMaterial, in: .rect(cornerRadius: 16))
 
-                Text("Playback and scanning settings will appear here.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                if let settings {
+                    PlaybackSettingsSection(settings: settings)
+                    VideoSettingsSection(settings: settings)
+                    LibrarySettingsSection(settings: settings)
+                }
+
+                imageCache
+
+                if let settings {
+                    AdvancedSettingsSection(settings: settings)
+                }
             }
             .padding(80)
+        }
+        .task {
+            // Creates the singleton on first run; @Query picks it up from there.
+            _ = ChocoPanSettings.shared(in: context)
+            cacheStatistics = await ImageCacher.shared.statistics()
         }
         .alert("Remove this library?", isPresented: $isConfirmingRemoval) {
             Button("Cancel", role: .cancel) {}
@@ -86,6 +96,53 @@ struct SettingsForm: View {
         } message: {
             Text("This removes \(source.anime.count) shows from the app. Data in the share will not be touched")
         }
+    }
+
+    private var settings: ChocoPanSettings? { settingsRecords.first }
+
+    private var imageCache: some View {
+        SettingsCard(title: "Image Cache") {
+            VStack(alignment: .leading, spacing: 8) {
+                Label(cacheStatistics.description, systemImage: "photo.stack")
+                    .font(.headline)
+
+                Text(cacheStatus)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button {
+                Task { await rebuildCache() }
+            } label: {
+                Label("Re-cache Images", systemImage: "arrow.clockwise")
+            }
+            .disabled(refresher.isRunning || posterURLs.isEmpty)
+        }
+    }
+
+    private var cacheStatus: String {
+        switch refresher.phase {
+        case .idle:
+            return "Clears every cached poster and thumbnail, then downloads "
+                + "\(posterURLs.count) poster\(posterURLs.count == 1 ? "" : "s") again. "
+                + "Thumbnails rebuild themselves as episodes are shown."
+        case .running(let completed, let total):
+            return "Rebuilding… \(completed) of \(total)"
+        case .finished(let summary):
+            return summary
+        }
+    }
+
+    private var posterURLs: [URL] {
+        anime.compactMap(\.posterSource)
+    }
+
+    private func rebuildCache() async {
+        await refresher.rebuild(posterURLs: posterURLs)
+        if let settings {
+            await ImageCacher.shared.evictIfNeeded(limitMB: settings.thumbnailCacheLimitMB)
+        }
+        cacheStatistics = await ImageCacher.shared.statistics()
     }
 
     private func detail(for source: LibrarySource) -> String {

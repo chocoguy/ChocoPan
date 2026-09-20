@@ -35,6 +35,7 @@ class Anime {
     
     var synopsis: String?
     
+    var posterWebURL: URL?
     var posterURL: String?
     
     var preferredAudioTrack: String?
@@ -71,6 +72,7 @@ class Anime {
         tags: [String] = [],
         studios: [String] = [],
         synopsis: String? = nil,
+        posterWebURL: URL? = nil,
         posterURL: String? = nil,
         preferredAudioTrack: String? = nil,
         preferredSubTrack: String? = nil,
@@ -98,6 +100,7 @@ class Anime {
         self.tags = tags
         self.studios = studios
         self.synopsis = synopsis
+        self.posterWebURL = posterWebURL
         self.posterURL = posterURL
         self.preferredAudioTrack = preferredAudioTrack
         self.preferredSubTrack = preferredSubTrack
@@ -142,5 +145,28 @@ extension Anime {
         unresolvedNumber = number
         shownTitle = "Unknown Anime #\(number)"
         title = folderName
+    }
+
+    /// Where the poster is fetched from. Prefers the typed URL, falling back to the string field
+    /// for rows imported before `posterWebURL` existed — those only fill in on the next scan.
+    var posterSource: URL? {
+        posterWebURL ?? posterURL.flatMap { URL(string: $0) }
+    }
+
+    /// Regular episodes first, then OVAs, each ascending by number.
+    var orderedEpisodes: [AnimeEpisode] {
+        episodes.sorted {
+            ($0.isOva ? 1 : 0, $0.episodeNumber) < ($1.isOva ? 1 : 0, $1.episodeNumber)
+        }
+    }
+
+    /// What the play button offers: the episode left partway through, otherwise the first
+    /// unwatched one, otherwise the start of the show again.
+    var nextEpisode: AnimeEpisode? {
+        let ordered = orderedEpisodes
+        let inProgress = ordered
+            .filter { !$0.watched && $0.playbackPositionSeconds > 0 }
+            .max { $0.lastPlayedDate < $1.lastPlayedDate }
+        return inProgress ?? ordered.first { !$0.watched } ?? ordered.first
     }
 }

@@ -3,35 +3,59 @@ import SwiftUI
 
 struct AnimeCard: View {
     let anime: Anime
+    var onPlay: (AnimeEpisode) -> Void = { _ in }
+    var onOpenShow: () -> Void = {}
 
     static let posterWidth: CGFloat = 260
     private var posterHeight: CGFloat { Self.posterWidth * 3 / 2 }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(spacing: 12) {
+            Text(anime.shownTitle)
+                .font(.callout)
+                .fontWeight(.semibold)
+                .multilineTextAlignment(.center)
+                .lineLimit(2, reservesSpace: true)
+                .truncationMode(.tail)
+
             poster
                 .frame(width: Self.posterWidth, height: posterHeight)
                 .clipShape(.rect(cornerRadius: 12))
                 .overlay(alignment: .topTrailing) { badge }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(anime.shownTitle)
-                    .font(.callout)
-                    .lineLimit(2)
-                    .truncationMode(.tail)
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
 
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            .frame(width: Self.posterWidth, alignment: .leading)
+            actions
         }
+        .frame(width: Self.posterWidth)
+    }
+
+    private var actions: some View {
+        HStack(spacing: 12) {
+            if let episode = anime.nextEpisode {
+                Button {
+                    onPlay(episode)
+                } label: {
+                    Label(playTitle(for: episode), systemImage: "play.fill")
+                        .frame(maxWidth: .infinity)
+                }
+            }
+
+            Button(action: onOpenShow) {
+                Label("Show", systemImage: "arrow.up.forward.app")
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .font(.caption)
+        .lineLimit(1)
     }
 
     @ViewBuilder
     private var poster: some View {
-        if let urlString = anime.posterURL, let url = URL(string: urlString) {
+        if let url = anime.posterSource {
             CachedImage(posterURL: url) {
                 placeholder
             }
@@ -62,6 +86,10 @@ struct AnimeCard: View {
                 .foregroundStyle(.white)
                 .padding(10)
         }
+    }
+
+    private func playTitle(for episode: AnimeEpisode) -> String {
+        episode.isOva ? "OVA \(episode.episodeNumber)" : "Ep \(episode.episodeNumber)"
     }
 
     private var subtitle: String {

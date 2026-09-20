@@ -34,6 +34,17 @@ nonisolated struct ImageKey: Hashable, Sendable {
     var cacheKey: NSString { basename as NSString }
 }
 
+nonisolated struct CacheStatistics: Sendable {
+    let fileCount: Int
+    let byteCount: Int
+
+    var description: String {
+        guard fileCount > 0 else { return "empty" }
+        let size = ByteCountFormatter.string(fromByteCount: Int64(byteCount), countStyle: .file)
+        return "\(fileCount) image\(fileCount == 1 ? "" : "s") · \(size)"
+    }
+}
+
 nonisolated enum ImageCacheError: Error, CustomStringConvertible {
     case encoderUnavailable
     case encodeFailed
@@ -69,6 +80,7 @@ actor ImageCacher {
 
         format = StorageFormat.supported
         memory.totalCostLimit = memoryLimitBytes
+        Self.sweepTemporaries(in: directory)
     }
 
     func image(
@@ -91,7 +103,14 @@ actor ImageCacher {
                 return onDisk
             }
             let produced = try await produce()
-            try? Self.write(produced, to: url, format: format)
+            do {
+                try Self.write(produced, to: url, format: format)
+            } catch {
+                // Non-fatal: the caller still gets its image, but the disk cache is not doing its
+                // job, so say so rather than silently refetching on every launch forever.
+                print("ImageCacher: could not cache \(url.lastPathComponent): \(error)")
+                Self.sweepTemporaries(in: url.deletingLastPathComponent())
+            }
             return produced
         }
         inFlight[key] = task
@@ -166,6 +185,18 @@ actor ImageCacher {
         }
     }
 
+    /// What is actually on disk right now, for the cache section in Settings.
+    func statistics() -> CacheStatistics {
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: .skipsHiddenFiles
+        ) else { return CacheStatistics(fileCount: 0, byteCount: 0) }
+
+        let sizes = contents.compactMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize }
+        return CacheStatistics(fileCount: sizes.count, byteCount: sizes.reduce(0, +))
+    }
+
     func clear() {
         memory.removeAllObjects()
         try? FileManager.default.removeItem(at: directory)
@@ -221,6 +252,20 @@ actor ImageCacher {
 
  
     
+    /// `CGImageDestination` writes through a dot-prefixed scratch file and only cleans it up on a
+    /// successful finalize. A failed encoder leaves one behind per write, and they are invisible to
+    /// `evictIfNeeded`, which skips hidden files.
+    private nonisolated static func sweepTemporaries(in directory: URL) {
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        ) else { return }
+
+        for url in contents where url.lastPathComponent.hasPrefix(".") {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
     private nonisolated static func touch(_ url: URL) {
         guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
               let modified = values.contentModificationDate,
@@ -239,10 +284,46 @@ nonisolated enum StorageFormat: Sendable {
     case heic
     case jpeg
 
+    /// Advertised support is not the same as working support: the tvOS simulator lists `public.heic`
+    /// among its destination types but fails at finalize, so every write used to die and leave a
+    /// zero-byte scratch file behind. Encode a pixel and see what actually comes out.
     static let supported: StorageFormat = {
         let identifiers = CGImageDestinationCopyTypeIdentifiers() as? [String] ?? []
-        return identifiers.contains(UTType.heic.identifier) ? .heic : .jpeg
+        if identifiers.contains(UTType.heic.identifier), canEncode(.heic) {
+            return .heic
+        }
+        return .jpeg
     }()
+
+    private static func canEncode(_ format: StorageFormat) -> Bool {
+        guard let image = onePixel else { return false }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            data as CFMutableData,
+            format.identifier as CFString,
+            1,
+            nil
+        ) else { return false }
+
+        CGImageDestinationAddImage(destination, image, nil)
+        return CGImageDestinationFinalize(destination) && data.length > 0
+    }
+
+    private static var onePixel: CGImage? {
+        var pixel: [UInt8] = [0, 0, 0, 255]
+        let bitmapInfo = CGImageAlphaInfo.noneSkipLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        return pixel.withUnsafeMutableBytes { bytes in
+            CGContext(
+                data: bytes.baseAddress,
+                width: 1,
+                height: 1,
+                bitsPerComponent: 8,
+                bytesPerRow: 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: bitmapInfo
+            )?.makeImage()
+        }
+    }
 
     var identifier: String {
         switch self {

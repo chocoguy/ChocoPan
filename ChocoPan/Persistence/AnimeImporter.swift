@@ -42,7 +42,7 @@ enum AnimeImporter {
             titleShort: apiAnime.titleShort,
             titleRomanized: apiAnime.titleRomanized,
             titleKana: apiAnime.titleKana,
-            shownTitle: apiAnime.titleShort ?? apiAnime.title,
+            shownTitle: apiAnime.title,
             year: apiAnime.year,
             episodeCount: apiAnime.episodeCount,
             IsLinkedToMal: malAnimeId != nil,
@@ -51,6 +51,7 @@ enum AnimeImporter {
             tags: apiAnime.tags ?? [],
             studios: apiAnime.studios ?? [],
             synopsis: apiAnime.synopsis,
+            posterWebURL: apiAnime.poster.flatMap { URL(string: $0) },
             posterURL: apiAnime.poster,
             metadataState: .matched,
             folderModifiedDate: folderModifiedDate,
@@ -71,7 +72,7 @@ enum AnimeImporter {
         anime.titleShort = apiAnime.titleShort
         anime.titleRomanized = apiAnime.titleRomanized
         anime.titleKana = apiAnime.titleKana
-        anime.shownTitle = apiAnime.titleShort ?? apiAnime.title
+        anime.shownTitle = apiAnime.title
         anime.year = apiAnime.year
         anime.episodeCount = apiAnime.episodeCount
         anime.seasonName = apiAnime.season?.name ?? "unknown"
@@ -79,6 +80,7 @@ enum AnimeImporter {
         anime.tags = apiAnime.tags ?? []
         anime.studios = apiAnime.studios ?? []
         anime.synopsis = apiAnime.synopsis
+        anime.posterWebURL = apiAnime.poster.flatMap { URL(string: $0) }
         anime.posterURL = apiAnime.poster
 
         anime.metadataState = .matched

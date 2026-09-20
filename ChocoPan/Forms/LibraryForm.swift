@@ -7,6 +7,7 @@ struct LibraryForm: View {
 
     @State private var isFilteringReview = false
     @State private var isBannerDismissed = false
+    @State private var path: [Anime] = []
 
     private let navigation = LibraryNavigation.shared
 
@@ -20,11 +21,19 @@ struct LibraryForm: View {
     }
 
     var body: some View {
-        Group {
-            if librarySources.isEmpty {
-                NoLibrarySourceView()
-            } else {
-                library
+        NavigationStack(path: $path) {
+            Group {
+                if librarySources.isEmpty {
+                    NoLibrarySourceView()
+                } else {
+                    library
+                }
+            }
+            .navigationDestination(for: Anime.self) { show in
+                LibraryAnimeForm(anime: show) { episode in
+                    // TODO: hand off to the player once library playback exists.
+                    print("Show: play \(show.shownTitle) ep \(episode.episodeNumber)")
+                }
             }
         }
         .onChange(of: navigation.wantsReviewFilter) { _, wants in
@@ -56,7 +65,14 @@ struct LibraryForm: View {
                 } else {
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 44) {
                         ForEach(visible) { show in
-                            AnimeCard(anime: show)
+                            AnimeCard(
+                                anime: show,
+                                // TODO: hand off to the player once library playback exists.
+                                onPlay: { episode in
+                                    print("Library: play \(show.shownTitle) ep \(episode.episodeNumber)")
+                                },
+                                onOpenShow: { path.append(show) }
+                            )
                         }
                     }
                 }
