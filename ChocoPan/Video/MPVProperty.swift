@@ -1,4 +1,4 @@
-/// Names of the mpv properties this player observes or reads.
+/// Names of the mpv properties this player observes, reads or writes.
 /// Full list: https://mpv.io/manual/stable/#property-list
 enum MPVProperty {
     static let pause = "pause"
@@ -8,4 +8,10 @@ enum MPVProperty {
     static let estimatedVfFps = "estimated-vf-fps"
     static let frameDropCount = "frame-drop-count"
     static let avsync = "avsync"
+    static let videoHeight = "video-params/h"
+    static let demuxerCacheTime = "demuxer-cache-time"
+    static let containerFps = "container-fps"
+    static let speed = "speed"
+    static let start = "start"
+    static let trackList = "track-list"
 }

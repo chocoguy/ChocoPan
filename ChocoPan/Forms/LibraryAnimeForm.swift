@@ -5,6 +5,8 @@ struct LibraryAnimeForm: View {
     let anime: Anime
     var onPlay: (AnimeEpisode) -> Void = { _ in }
 
+    @Environment(\.modelContext) private var context
+
     private static let posterWidth: CGFloat = 300
     private var posterHeight: CGFloat { Self.posterWidth * 3 / 2 }
 
@@ -18,8 +20,6 @@ struct LibraryAnimeForm: View {
             .padding(60)
         }
     }
-
-    // MARK: - Header
 
     private var header: some View {
         HStack(alignment: .top, spacing: 36) {
@@ -75,7 +75,6 @@ struct LibraryAnimeForm: View {
         }
     }
 
-    /// The stacked facts under the title, skipping anything the scan could not resolve.
     private var metaLines: [String] {
         var lines: [String] = []
 
@@ -97,8 +96,6 @@ struct LibraryAnimeForm: View {
         return lines
     }
 
-    // MARK: - Episodes
-
     @ViewBuilder
     private var episodeGrid: some View {
         let episodes = anime.orderedEpisodes
@@ -111,7 +108,13 @@ struct LibraryAnimeForm: View {
         } else {
             LazyVGrid(columns: columns, alignment: .leading, spacing: 36) {
                 ForEach(episodes) { episode in
-                    EpisodeCard(episode: episode) { onPlay(episode) }
+                    EpisodeCard(
+                        episode: episode,
+                        thumbnailSource: thumbnailSource,
+                        thumbnailWidth: thumbnailWidth
+                    ) {
+                        onPlay(episode)
+                    }
                 }
             }
         }
@@ -121,7 +124,15 @@ struct LibraryAnimeForm: View {
         [GridItem(.adaptive(minimum: EpisodeCard.width), spacing: 28, alignment: .top)]
     }
 
-    // MARK: - Anime settings
+    private var settings: ChocoPanSettings { ChocoPanSettings.shared(in: context) }
+
+    private var thumbnailWidth: Int { settings.thumbnailMaxWidth }
+
+    private var thumbnailSource: ThumbnailSource? {
+        guard settings.generateThumbnailsOnScan, let source = anime.source else { return nil }
+        return ThumbnailSource(source)
+    }
+
 
     private var animeSettings: some View {
         HStack {
@@ -134,10 +145,11 @@ struct LibraryAnimeForm: View {
     }
 }
 
-// MARK: - Episode card
 
 struct EpisodeCard: View {
     let episode: AnimeEpisode
+    var thumbnailSource: ThumbnailSource?
+    var thumbnailWidth: Int = 640
     let onPlay: () -> Void
 
     static let width: CGFloat = 420
@@ -167,10 +179,28 @@ struct EpisodeCard: View {
         .frame(width: Self.width)
     }
 
-    /// Thumbnails cannot be generated yet: `VideoThumbnailer` opens a path with FFmpeg directly and
-    /// these files only exist behind SMB. Swap the placeholder for `CachedImage(episodeId:…)` once
-    /// there is a URL FFmpeg can read.
+    @ViewBuilder
     private var thumbnail: some View {
+        if let thumbnailSource, !episode.thumbnailUnavailable {
+            CachedImage(
+                episode: episode,
+                source: thumbnailSource,
+                maxWidth: thumbnailWidth,
+                onFailure: { error in
+                    if (error as? ThumbnailError)?.isPermanent == true {
+                        episode.thumbnailUnavailable = true
+                    }
+                }
+            ) {
+                thumbnailPlaceholder
+            }
+            .aspectRatio(contentMode: .fill)
+        } else {
+            thumbnailPlaceholder
+        }
+    }
+
+    private var thumbnailPlaceholder: some View {
         ZStack {
             Rectangle().fill(.quaternary)
             Image(systemName: "play.rectangle")
@@ -194,7 +224,7 @@ struct EpisodeCard: View {
     }
 
     private var caption: String {
-        let label = episode.isOva ? "OVA \(episode.episodeNumber)" : "Episode \(episode.episodeNumber)"
+        let label = episode.displayLabel
         guard episode.episodeLengthSeconds > 0 else { return label }
         return "\(label) | \(FormatDuration(seconds: episode.episodeLengthSeconds))"
     }

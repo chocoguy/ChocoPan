@@ -1,12 +1,9 @@
 import AVFoundation
+import AVKit
+import CoreMedia
 import Libmpv
 import UIKit
 
-/// Hosts a `MetalLayer` and drives it with an embedded mpv instance.
-///
-/// mpv renders straight into the layer via `--wid`, so there is no per-frame work on our side.
-/// Events arrive on mpv's own thread through `mpv_set_wakeup_callback`, get drained on `queue`,
-/// and are forwarded to `playDelegate` on the main actor.
 final class MPVMetalViewController: UIViewController {
     nonisolated(unsafe) private var mpv: OpaquePointer?
     nonisolated private let queue = DispatchQueue(label: "com.vanillacoffeesoft.ChocoPan.mpv", qos: .userInitiated)
@@ -15,10 +12,10 @@ final class MPVMetalViewController: UIViewController {
 
     weak var playDelegate: MPVPlayerDelegate?
     var playUrl: URL?
-    /// Set before the view loads to serve playback over the custom SMB protocol.
     var smbSession: SMBSession?
+    var configuration: PlayerConfiguration = .standard
+    var startAtSeconds: Double = 0
 
-    /// Retained reference handed to mpv's protocol registration; released only after teardown.
     nonisolated(unsafe) private var smbUserData: UnsafeMutableRawPointer?
 
     override func viewDidLoad() {
@@ -34,19 +31,16 @@ final class MPVMetalViewController: UIViewController {
         setupMpv()
 
         if let playUrl {
-            loadFile(playUrl)
+            loadFile(playUrl, startAt: startAtSeconds)
         }
     }
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
 
-        // Layer geometry is not view geometry: without this the resize animates and mpv sees
-        // intermediate drawable sizes.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         metalLayer.frame = view.bounds
-        // Resolved here rather than in viewDidLoad: the screen is only reachable once we have a window.
         metalLayer.contentsScale = view.window?.windowScene?.screen.nativeScale
             ?? view.traitCollection.displayScale
         CATransaction.commit()
@@ -56,14 +50,8 @@ final class MPVMetalViewController: UIViewController {
         shutdown()
     }
 
-    /// Tears mpv down and releases the SMB registration.
-    ///
-    /// Callers streaming over SMB must call this *before* disconnecting the session: mpv guarantees
-    /// every stream is closed once `mpv_terminate_destroy` returns, and in-flight stream callbacks
-    /// would otherwise touch a dead session. Safe to call more than once.
     nonisolated func shutdown() {
         guard let handle = mpv else { return }
-        // Cleared first so the event loop stops entering with a handle that is going away.
         mpv = nil
         mpv_set_wakeup_callback(handle, nil, nil)
         mpv_terminate_destroy(handle)
@@ -89,15 +77,10 @@ final class MPVMetalViewController: UIViewController {
         }
         mpv = handle
 
-        // Options must be set between mpv_create() and mpv_initialize().
-        // https://mpv.io/manual/stable/#options
-#if DEBUG
-        checkError(mpv_request_log_messages(handle, "debug"))
-#else
-        checkError(mpv_request_log_messages(handle, "no"))
-#endif
 
-        // Hand mpv the Metal layer to render into.
+        // https://mpv.io/manual/stable/#options
+        checkError(mpv_request_log_messages(handle, configuration.logLevel))
+
         var wid = Int64(Int(bitPattern: Unmanaged.passUnretained(metalLayer).toOpaque()))
         checkError(mpv_set_option(handle, "wid", MPV_FORMAT_INT64, &wid))
 
@@ -108,19 +91,22 @@ final class MPVMetalViewController: UIViewController {
         checkError(mpv_set_option_string(handle, "gpu-context", "moltenvk"))
         checkError(mpv_set_option_string(handle, "video-rotate", "no"))
 
-        // VideoToolbox is not dependable in the simulator; software decode is fine there.
 #if targetEnvironment(simulator)
         checkError(mpv_set_option_string(handle, "hwdec", "no"))
 #else
-        checkError(mpv_set_option_string(handle, "hwdec", "videotoolbox"))
+        checkError(mpv_set_option_string(handle, "hwdec", configuration.hardwareDecoding ? "videotoolbox" : "no"))
 #endif
 
-        // Matters only for network sources, harmless for local files.
+        checkError(mpv_set_option_string(handle, MPVProperty.speed, String(configuration.playbackSpeed)))
+
         checkError(mpv_set_option_string(handle, "cache", "yes"))
         checkError(mpv_set_option_string(handle, "demuxer-max-bytes", "64MiB"))
         checkError(mpv_set_option_string(handle, "demuxer-readahead-secs", "20"))
 
-        // Must happen before initialize: protocols cannot be added to a running core.
+        for option in configuration.extraOptions {
+            checkError(mpv_set_option_string(handle, option.name, option.value))
+        }
+
         if let smbSession {
             smbUserData = SMBStreamProtocol.register(on: handle, session: smbSession)
         }
@@ -134,20 +120,19 @@ final class MPVMetalViewController: UIViewController {
         mpv_observe_property(handle, 0, MPVProperty.estimatedVfFps, MPV_FORMAT_DOUBLE)
         mpv_observe_property(handle, 0, MPVProperty.frameDropCount, MPV_FORMAT_INT64)
         mpv_observe_property(handle, 0, MPVProperty.avsync, MPV_FORMAT_DOUBLE)
+        mpv_observe_property(handle, 0, MPVProperty.videoHeight, MPV_FORMAT_INT64)
+        mpv_observe_property(handle, 0, MPVProperty.demuxerCacheTime, MPV_FORMAT_DOUBLE)
 
-        // Must stay non-capturing: this is a C function pointer.
         mpv_set_wakeup_callback(handle, { ctx in
             guard let ctx else { return }
             Unmanaged<MPVMetalViewController>.fromOpaque(ctx).takeUnretainedValue().readEvents()
         }, Unmanaged.passUnretained(self).toOpaque())
     }
 
-    // MARK: - Playback control
-
-    func loadFile(_ url: URL) {
-        // A plain POSIX path avoids percent-encoding entirely. It is passed as a single argv
-        // element, so spaces and brackets need no escaping.
+    func loadFile(_ url: URL, startAt seconds: Double = 0) {
         let target = url.isFileURL ? url.path : url.absoluteString
+
+        setString(MPVProperty.start, seconds > 0 ? String(seconds) : "0")
         command("loadfile", args: [target, "replace"])
     }
 
@@ -167,14 +152,85 @@ final class MPVMetalViewController: UIViewController {
         command("seek", args: [String(seconds), "relative"])
     }
 
-    // MARK: - Tracks
+    func seek(to seconds: Double) {
+        command("seek", args: [String(max(0, seconds)), "absolute"])
+    }
 
-    /// Reads `track-list` and hands it to the delegate.
-    ///
-    /// Selection state lives in the list's own `selected` flags, so re-reading after a change is both
-    /// simpler and more reliable than separately observing `aid`/`sid`.
+    func setSpeed(_ speed: Double) {
+        setDouble(MPVProperty.speed, speed)
+    }
+
+
+    func applyDisplayCriteria() {
+        guard configuration.matchesContentFrameRate,
+              let manager = displayManager,
+              manager.isDisplayCriteriaMatchingEnabled,
+              !manager.isDisplayModeSwitchInProgress,
+              let fps = getString("container-fps").flatMap(Double.init), fps > 0,
+              let format = videoFormatDescription() else {
+            return
+        }
+        manager.preferredDisplayCriteria = AVDisplayCriteria(
+            refreshRate: Float(fps),
+            formatDescription: format
+        )
+    }
+
+    func resetDisplayCriteria() {
+        displayManager?.preferredDisplayCriteria = nil
+    }
+
+    private var displayManager: AVDisplayManager? {
+        guard let window = view.window,
+              window.responds(to: NSSelectorFromString("avDisplayManager")) else {
+            return nil
+        }
+        return window.avDisplayManager
+    }
+
+    private func videoFormatDescription() -> CMFormatDescription? {
+        guard let width = getString("video-params/w").flatMap(Int32.init),
+              let height = getString("video-params/h").flatMap(Int32.init),
+              width > 0, height > 0 else {
+            return nil
+        }
+
+        let gamma = getString("video-params/gamma")
+        let isHDR = gamma == "pq" || gamma == "hlg"
+        let transfer: CFString = switch gamma {
+        case "pq": kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ
+        case "hlg": kCVImageBufferTransferFunction_ITU_R_2100_HLG
+        default: kCVImageBufferTransferFunction_ITU_R_709_2
+        }
+
+        let extensions: [CFString: Any] = [
+            kCVImageBufferColorPrimariesKey: isHDR
+                ? kCVImageBufferColorPrimaries_ITU_R_2020
+                : kCVImageBufferColorPrimaries_ITU_R_709_2,
+            kCVImageBufferTransferFunctionKey: transfer,
+            kCVImageBufferYCbCrMatrixKey: isHDR
+                ? kCVImageBufferYCbCrMatrix_ITU_R_2020
+                : kCVImageBufferYCbCrMatrix_ITU_R_709_2,
+        ]
+
+        var description: CMFormatDescription?
+        let status = CMVideoFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault,
+            codecType: isHDR ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264,
+            width: width,
+            height: height,
+            extensions: extensions as CFDictionary,
+            formatDescriptionOut: &description
+        )
+        guard status == noErr else {
+            print("[player] could not describe the video format: \(status)")
+            return nil
+        }
+        return description
+    }
+
     func refreshTracks() {
-        guard let json = getString("track-list"),
+        guard let json = getString(MPVProperty.trackList),
               let data = json.data(using: .utf8),
               let tracks = try? JSONDecoder().decode([MPVTrack].self, from: data) else {
             print("[tracks] could not read track-list")
@@ -183,22 +239,17 @@ final class MPVMetalViewController: UIViewController {
         playDelegate?.playerDidChange(.tracks(tracks))
     }
 
-    /// `nil` disables the track ("no" to mpv).
     func selectTrack(id: Int?, kind: MPVTrackKind) {
         setString(kind.property, id.map(String.init) ?? "no")
         refreshTracks()
     }
 
-    /// Swaps the active Anime4K chain. Takes effect on the next rendered frame, so it can be used to
-    /// A/B the same paused image.
     func apply(preset: Anime4KPreset) {
         let (paths, missing) = preset.resolve()
         if !missing.isEmpty {
             print("[Anime4K] \(preset.name): could not resolve \(missing)")
         }
 
-        // One append per path rather than a single joined string: glsl-shaders is a colon-separated
-        // list and these paths come from the simulator, so joining invites an escaping bug.
         command("change-list", args: ["glsl-shaders", "clr", ""])
         for path in paths {
             command("change-list", args: ["glsl-shaders", "append", path])
@@ -206,7 +257,6 @@ final class MPVMetalViewController: UIViewController {
         print("[Anime4K] \(preset.name): \(paths.count) shader(s) active")
     }
 
-    // MARK: - Property access
 
     private func getString(_ name: String) -> String? {
         guard let mpv, let value = mpv_get_property_string(mpv, name) else { return nil }
@@ -226,13 +276,18 @@ final class MPVMetalViewController: UIViewController {
         return data != 0
     }
 
+    private func setDouble(_ name: String, _ value: Double) {
+        guard let mpv else { return }
+        var data = value
+        checkError(mpv_set_property(mpv, name, MPV_FORMAT_DOUBLE, &data))
+    }
+
     private func setFlag(_ name: String, _ flag: Bool) {
         guard let mpv else { return }
         var data: Int32 = flag ? 1 : 0
         mpv_set_property(mpv, name, MPV_FORMAT_FLAG, &data)
     }
 
-    /// mpv takes a NULL-terminated argv; the terminator is appended here, callers pass plain strings.
     private func command(_ command: String, args: [String] = []) {
         guard let mpv else { return }
 
@@ -246,9 +301,6 @@ final class MPVMetalViewController: UIViewController {
         checkError(mpv_command(mpv, &cargs))
     }
 
-    // MARK: - Event loop
-
-    /// Called from mpv's thread; hops onto `queue` to drain the event queue.
     nonisolated private func readEvents() {
         queue.async { [weak self] in
             guard let self else { return }
@@ -267,7 +319,6 @@ final class MPVMetalViewController: UIViewController {
             let property = raw.assumingMemoryBound(to: mpv_event_property.self).pointee
             guard let value = property.data else { return }
 
-            // MPV_FORMAT_FLAG is a C int, MPV_FORMAT_DOUBLE a double.
             switch String(cString: property.name) {
             case MPVProperty.pause:
                 emit(.pause(value.assumingMemoryBound(to: Int32.self).pointee != 0))
@@ -283,6 +334,10 @@ final class MPVMetalViewController: UIViewController {
                 emit(.droppedFrames(value.assumingMemoryBound(to: Int64.self).pointee))
             case MPVProperty.avsync:
                 emit(.avsync(value.assumingMemoryBound(to: Double.self).pointee))
+            case MPVProperty.videoHeight:
+                emit(.videoHeight(Int(value.assumingMemoryBound(to: Int64.self).pointee)))
+            case MPVProperty.demuxerCacheTime:
+                emit(.cacheSeconds(value.assumingMemoryBound(to: Double.self).pointee))
             default:
                 break
             }
@@ -291,7 +346,12 @@ final class MPVMetalViewController: UIViewController {
             emit(.fileLoaded)
 
         case MPV_EVENT_END_FILE:
-            emit(.endFile)
+            guard let raw = event.pointee.data else {
+                emit(.endFile(.unknown))
+                return
+            }
+            let end = raw.assumingMemoryBound(to: mpv_event_end_file.self).pointee
+            emit(.endFile(MPVEndReason(end)))
 
         case MPV_EVENT_LOG_MESSAGE:
             guard let raw = event.pointee.data else { return }

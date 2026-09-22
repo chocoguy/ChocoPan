@@ -1,15 +1,9 @@
 import Foundation
 
 func FormatYear(year: Int) -> String {
-    let formatter = NumberFormatter()
-    formatter.numberStyle = .decimal
-    formatter.minimumFractionDigits = 0
-    formatter.maximumFractionDigits = 0
-
-    return formatter.string(from: NSNumber(value: year)) ?? ""
+    String(year)
 }
 
-/// Runtime as `mm:ss`, or `h:mm:ss` once it passes an hour.
 func FormatDuration(seconds: Double) -> String {
     guard seconds > 0 else { return "" }
     let total = Int(seconds.rounded())

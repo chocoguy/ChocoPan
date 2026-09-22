@@ -1,8 +1,6 @@
 import SwiftUI
 
-// MARK: - Building blocks
 
-/// The card every settings group sits in.
 struct SettingsCard<Content: View>: View {
     let title: String
     @ViewBuilder let content: () -> Content
@@ -21,7 +19,6 @@ struct SettingsCard<Content: View>: View {
     }
 }
 
-/// A label-and-control pair for everything that is not a toggle.
 struct SettingsRow<Control: View>: View {
     let title: String
     var detail: String? = nil
@@ -48,7 +45,6 @@ struct SettingsRow<Control: View>: View {
     }
 }
 
-/// A toggle that carries its own explanation.
 struct SettingsToggle: View {
     let title: String
     var detail: String? = nil
@@ -69,12 +65,10 @@ struct SettingsToggle: View {
     }
 }
 
-/// tvOS has no `Stepper` or `Slider`, so every number is chosen from a fixed set.
 private func secondsLabel(_ value: Double) -> String {
     value == 0 ? "Off" : "\(Int(value))s"
 }
 
-// MARK: - Playback
 
 struct PlaybackSettingsSection: View {
     @Bindable var settings: ChocoPanSettings
@@ -177,7 +171,6 @@ struct PlaybackSettingsSection: View {
     }
 }
 
-// MARK: - Video
 
 struct VideoSettingsSection: View {
     @Bindable var settings: ChocoPanSettings
@@ -226,7 +219,6 @@ private func presetPicker(title: String, selection: Binding<String>) -> some Vie
     .pickerStyle(.segmented)
 }
 
-// MARK: - Library
 
 struct LibrarySettingsSection: View {
     @Bindable var settings: ChocoPanSettings
@@ -248,8 +240,8 @@ struct LibrarySettingsSection: View {
             )
 
             SettingsToggle(
-                title: "Thumbnails on Scan",
-                detail: "Pull a still from each episode while scanning.",
+                title: "Episode Thumbnails",
+                detail: "Pull a still from each episode the first time you open a show.",
                 isOn: $settings.generateThumbnailsOnScan
             )
 
@@ -276,7 +268,6 @@ struct LibrarySettingsSection: View {
     }
 }
 
-// MARK: - Advanced
 
 struct AdvancedSettingsSection: View {
     @Bindable var settings: ChocoPanSettings

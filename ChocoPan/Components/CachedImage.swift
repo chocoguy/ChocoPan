@@ -5,16 +5,19 @@ struct CachedImage<Placeholder: View>: View {
     private let key: ImageKey
     private let produce: @Sendable () async throws -> CGImage
     private let placeholder: () -> Placeholder
+    private var onFailure: (@MainActor (Error) -> Void)?
 
     @State private var image: CGImage?
 
     init(
         key: ImageKey,
         produce: @escaping @Sendable () async throws -> CGImage,
+        onFailure: (@MainActor (Error) -> Void)? = nil,
         @ViewBuilder placeholder: @escaping () -> Placeholder
     ) {
         self.key = key
         self.produce = produce
+        self.onFailure = onFailure
         self.placeholder = placeholder
     }
 
@@ -22,7 +25,13 @@ struct CachedImage<Placeholder: View>: View {
         content
             .task(id: key) {
                 image = nil
-                image = try? await ImageCacher.shared.image(for: key, produce: produce)
+                do {
+                    image = try await ImageCacher.shared.image(for: key, produce: produce)
+                } catch {
+                    // Scrolling away cancels the task; that is not a failure to record.
+                    guard !Task.isCancelled else { return }
+                    onFailure?(error)
+                }
             }
     }
 
@@ -54,7 +63,33 @@ extension CachedImage {
         )
     }
 
-    /// An anime poster.
+    init(
+        episode: AnimeEpisode,
+        source: ThumbnailSource,
+        maxWidth: Int,
+        onFailure: (@MainActor (Error) -> Void)? = nil,
+        @ViewBuilder placeholder: @escaping () -> Placeholder
+    ) {
+        // Read off the model here: the closure runs off the main actor and must not touch it.
+        let path = episode.relativeFilePath
+        self.init(
+            key: .thumbnail(
+                episodeId: episode.animeEpisodeId,
+                fileModified: episode.fileModified,
+                maxWidth: maxWidth
+            ),
+            produce: {
+                try await ThumbnailProvider.shared.thumbnail(
+                    source: source,
+                    path: path,
+                    maxWidth: maxWidth
+                )
+            },
+            onFailure: onFailure,
+            placeholder: placeholder
+        )
+    }
+
     init(
         posterURL: URL,
         @ViewBuilder placeholder: @escaping () -> Placeholder

@@ -7,7 +7,6 @@ import Libswscale
 
 struct VideoThumbnail: @unchecked Sendable {
     let image: CGImage
-    /// The timestamp actually decoded, in seconds — not the requested one, which lands mid-GOP.
     let timestamp: Double
 }
 
@@ -21,6 +20,7 @@ enum ThumbnailError: Error, CustomStringConvertible {
     case noFrame
     case scalerUnavailable
     case imageCreationFailed
+    case ioSetupFailed
 
     var description: String {
         switch self {
@@ -33,10 +33,10 @@ enum ThumbnailError: Error, CustomStringConvertible {
         case .noFrame: "no frame decoded"
         case .scalerUnavailable: "could not create scaler"
         case .imageCreationFailed: "could not build CGImage"
+        case .ioSetupFailed: "could not set up SMB reading"
         }
     }
 
-    /// `av_err2str` is a C macro, so the buffer dance has to happen on this side.
     static func message(_ code: Int32) -> String {
         var buffer = [CChar](repeating: 0, count: 256)
         av_strerror(code, &buffer, buffer.count)
@@ -44,12 +44,19 @@ enum ThumbnailError: Error, CustomStringConvertible {
     }
 }
 
-/// Pulls a single frame out of a video file using FFmpeg directly.
-///
-/// `nonisolated` because the project defaults to MainActor isolation and every step here is blocking
-/// C code that must stay off the main thread.
+extension ThumbnailError {
+    var isPermanent: Bool {
+        switch self {
+        case .noVideoStream, .decoderUnavailable, .decoderOpen,
+             .noFrame, .scalerUnavailable, .imageCreationFailed:
+            true
+        case .open, .streamInfo, .seek, .ioSetupFailed:
+            false
+        }
+    }
+}
+
 nonisolated enum VideoThumbnailer {
-    /// Frames are grabbed from this window: past the cold open, before anything worth spoiling.
     private static let previewWindow: ClosedRange<Double> = 240...360
 
     private static let queue = DispatchQueue(
@@ -58,8 +65,12 @@ nonisolated enum VideoThumbnailer {
         attributes: .concurrent
     )
 
-    /// A random point in the 4–6 minute window, falling back proportionally for short videos so they
-    /// still produce something rather than failing.
+
+    private static let smbQueue = DispatchQueue(
+        label: "com.vanillacoffeesoft.ChocoPan.thumbnailer.smb",
+        qos: .utility
+    )
+
     static func randomPreviewTime(duration: Double) -> Double {
         guard duration > 0 else { return 0 }
         if duration > previewWindow.upperBound {
@@ -80,15 +91,42 @@ nonisolated enum VideoThumbnailer {
         }
     }
 
-    // MARK: - Extraction
+    static func thumbnail(
+        session: SMBSession,
+        path: String,
+        size: Int64,
+        maxWidth: Int = 640
+    ) async throws -> VideoThumbnail {
+        try await withCheckedThrowingContinuation { continuation in
+            smbQueue.async {
+                do {
+                    let input = try SMBAVInput(session: session, path: path, size: size)
+                    defer { input.close() }
+                    continuation.resume(
+                        returning: try extractFrame(format: input.format, maxWidth: maxWidth)
+                    )
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
 
     static func extractFrame(from url: URL, maxWidth: Int) throws -> VideoThumbnail {
         var formatContext: UnsafeMutablePointer<AVFormatContext>?
-        var status = avformat_open_input(&formatContext, url.path, nil, nil)
+        let status = avformat_open_input(&formatContext, url.path, nil, nil)
         guard status >= 0, let format = formatContext else { throw ThumbnailError.open(status) }
         defer { avformat_close_input(&formatContext) }
 
-        status = avformat_find_stream_info(format, nil)
+        return try extractFrame(format: format, maxWidth: maxWidth)
+    }
+
+    static func extractFrame(
+        format: UnsafeMutablePointer<AVFormatContext>,
+        maxWidth: Int
+    ) throws -> VideoThumbnail {
+        var status = avformat_find_stream_info(format, nil)
         guard status >= 0 else { throw ThumbnailError.streamInfo(status) }
 
         var decoder: UnsafePointer<AVCodec>?
@@ -114,16 +152,13 @@ nonisolated enum VideoThumbnailer {
         let secondsPerTick = Double(timeBase.num) / Double(timeBase.den)
         let target = randomPreviewTime(duration: duration(of: format, stream: stream))
 
-        // AV_TIME_BASE_Q is a compound-literal macro and does not import into Swift.
         let microsecondBase = AVRational(num: 1, den: AV_TIME_BASE)
         let seekTarget = av_rescale_q(Int64(target * Double(AV_TIME_BASE)), microsecondBase, timeBase)
 
         status = av_seek_frame(format, streamIndex, seekTarget, AVSEEK_FLAG_BACKWARD)
         guard status >= 0 else { throw ThumbnailError.seek(status) }
-        // Required: without it, frames buffered from before the seek come back first.
         avcodec_flush_buffers(codecContext)
 
-        // These must stay optional-typed: av_frame_free/av_packet_free take a pointer-to-optional.
         var frameRef: UnsafeMutablePointer<AVFrame>? = av_frame_alloc()
         var packetRef: UnsafeMutablePointer<AVPacket>? = av_packet_alloc()
         defer {
@@ -145,9 +180,6 @@ nonisolated enum VideoThumbnailer {
                 if stamp != Int64.min {  // AV_NOPTS_VALUE
                     decodedSeconds = Double(stamp) * secondsPerTick
                 }
-                // No av_frame_unref here on purpose: avcodec_receive_frame unrefs before filling,
-                // so after the loop `frame` still holds the last frame decoded — the fallback if
-                // the stream ends before the target.
                 if decodedSeconds >= target {
                     reachedTarget = true
                     break readLoop
@@ -161,7 +193,6 @@ nonisolated enum VideoThumbnailer {
         return VideoThumbnail(image: image, timestamp: decodedSeconds)
     }
 
-    /// Container duration, in seconds, falling back to the stream's own when the container has none.
     private static func duration(
         of format: UnsafeMutablePointer<AVFormatContext>,
         stream: UnsafeMutablePointer<AVStream>
@@ -176,7 +207,6 @@ nonisolated enum VideoThumbnailer {
         return 0
     }
 
-    // MARK: - Scaling and image creation
 
     private static func render(
         frame: UnsafeMutablePointer<AVFrame>,
@@ -188,7 +218,6 @@ nonisolated enum VideoThumbnailer {
         let sourceHeight = Int(frame.pointee.height)
         guard sourceWidth > 0, sourceHeight > 0 else { throw ThumbnailError.noFrame }
 
-        // Honour anamorphic content: pixel dimensions are not always display dimensions.
         let aspect = av_guess_sample_aspect_ratio(format, stream, frame)
         var displayWidth = sourceWidth
         if aspect.num > 0, aspect.den > 0 {
@@ -196,7 +225,6 @@ nonisolated enum VideoThumbnailer {
         }
 
         let scale = min(1.0, Double(maxWidth) / Double(displayWidth))
-        // Even dimensions keep swscale on its fast paths.
         let targetWidth = max(2, Int((Double(displayWidth) * scale).rounded()) & ~1)
         let targetHeight = max(2, Int((Double(sourceHeight) * scale).rounded()) & ~1)
 
@@ -230,7 +258,6 @@ nonisolated enum VideoThumbnailer {
             throw ThumbnailError.imageCreationFailed
         }
 
-        // RGBA in memory order: big-endian words with the alpha byte last and ignored.
         let bitmapInfo = CGBitmapInfo(
             rawValue: CGImageAlphaInfo.noneSkipLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
         )

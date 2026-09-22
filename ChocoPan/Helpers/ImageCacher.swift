@@ -20,6 +20,9 @@ nonisolated enum ImageTier: String, Sendable {
 //Some sort of a unique key, prevents duplicate conflicts
 nonisolated struct ImageKey: Hashable, Sendable {
     let basename: String
+    static func thumbnail(episodeId: UUID, fileModified: Date, maxWidth: Int) -> ImageKey {
+        ImageKey(basename: "ep-\(episodeId.uuidString)-\(Int(fileModified.timeIntervalSince1970))-w\(maxWidth)")
+    }
 
     static func thumbnail(episodeId: UUID, fileModified: Date, tier: ImageTier) -> ImageKey {
         ImageKey(basename: "ep-\(episodeId.uuidString)-\(Int(fileModified.timeIntervalSince1970))-\(tier.rawValue)")
@@ -106,8 +109,6 @@ actor ImageCacher {
             do {
                 try Self.write(produced, to: url, format: format)
             } catch {
-                // Non-fatal: the caller still gets its image, but the disk cache is not doing its
-                // job, so say so rather than silently refetching on every launch forever.
                 print("ImageCacher: could not cache \(url.lastPathComponent): \(error)")
                 Self.sweepTemporaries(in: url.deletingLastPathComponent())
             }
@@ -185,7 +186,6 @@ actor ImageCacher {
         }
     }
 
-    /// What is actually on disk right now, for the cache section in Settings.
     func statistics() -> CacheStatistics {
         guard let contents = try? FileManager.default.contentsOfDirectory(
             at: directory,
@@ -250,11 +250,7 @@ actor ImageCacher {
         return image
     }
 
- 
-    
-    /// `CGImageDestination` writes through a dot-prefixed scratch file and only cleans it up on a
-    /// successful finalize. A failed encoder leaves one behind per write, and they are invisible to
-    /// `evictIfNeeded`, which skips hidden files.
+
     private nonisolated static func sweepTemporaries(in directory: URL) {
         guard let contents = try? FileManager.default.contentsOfDirectory(
             at: directory,
@@ -284,9 +280,6 @@ nonisolated enum StorageFormat: Sendable {
     case heic
     case jpeg
 
-    /// Advertised support is not the same as working support: the tvOS simulator lists `public.heic`
-    /// among its destination types but fails at finalize, so every write used to die and leave a
-    /// zero-byte scratch file behind. Encode a pixel and see what actually comes out.
     static let supported: StorageFormat = {
         let identifiers = CGImageDestinationCopyTypeIdentifiers() as? [String] ?? []
         if identifiers.contains(UTType.heic.identifier), canEncode(.heic) {

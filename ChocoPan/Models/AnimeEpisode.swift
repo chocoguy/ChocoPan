@@ -54,3 +54,9 @@ class AnimeEpisode {
         self.anime = anime
     }
 }
+
+extension AnimeEpisode {
+    var displayLabel: String {
+        isOva ? "OVA \(episodeNumber)" : "Episode \(episodeNumber)"
+    }
+}

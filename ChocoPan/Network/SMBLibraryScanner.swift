@@ -64,7 +64,7 @@ nonisolated enum SMBLibraryScanner {
     }
 
     static func scanEpisodes(session: SMBSession, folder: ScannedFolder) async throws -> [ScannedFile] {
-        let entries = try await session.listDirectory(path: folder.path, recursive: true)
+        let entries = try await session.listDirectory(path: folder.path, recursive: false)
         return files(from: entries, folderPath: folder.path)
     }
 
@@ -92,7 +92,7 @@ nonisolated enum SMBLibraryScanner {
                     modified: entry.contentModificationDate
                 )
             } else {
-                guard components.count > 1,
+                guard components.count == 2,
                       let file = makeFile(entry: entry, name: name, relativePath: full) else {
                     continue
                 }
@@ -110,9 +110,12 @@ nonisolated enum SMBLibraryScanner {
     }
 
     private static func files(from entries: [[URLResourceKey: Any]], folderPath: String) -> [ScannedFile] {
+        let prefix = normalized(folderPath)
         let collected = entries.compactMap { entry -> ScannedFile? in
             guard !entry.isDirectory, let name = entry.name else { return nil }
             let full = normalized(entry.path ?? join(folderPath, name))
+            guard let relative = strip(prefix: prefix, from: full),
+                  !relative.contains("/") else { return nil }
             return makeFile(entry: entry, name: name, relativePath: full)
         }
         return numbered(collected)
@@ -138,18 +141,34 @@ nonisolated enum SMBLibraryScanner {
     }
 
     private static func numbered(_ files: [ScannedFile]) -> [ScannedFile] {
-        files
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-            .enumerated()
-            .map { index, file in
-                ScannedFile(
-                    name: file.name,
-                    relativePath: file.relativePath,
-                    size: file.size,
-                    modified: file.modified,
-                    episodeNumber: parseEpisodeNumber(from: file.name) ?? index + 1
-                )
-            }
+        let sorted = files.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        let parsed = sorted.map { parseEpisodeNumber(from: $0.name) }
+
+        var taken = Set<Int>()
+        var numbers = [Int?](repeating: nil, count: sorted.count)
+
+        for (index, value) in parsed.enumerated() {
+            guard let value, !taken.contains(value) else { continue }
+            taken.insert(value)
+            numbers[index] = value
+        }
+
+        var next = (taken.max() ?? 0) + 1
+        for index in numbers.indices where numbers[index] == nil {
+            while taken.contains(next) { next += 1 }
+            taken.insert(next)
+            numbers[index] = next
+        }
+
+        return zip(sorted, numbers).map { file, number in
+            ScannedFile(
+                name: file.name,
+                relativePath: file.relativePath,
+                size: file.size,
+                modified: file.modified,
+                episodeNumber: number ?? 0
+            )
+        }
     }
 
     private static func isUsableDirectory(_ name: String) -> Bool {
@@ -164,32 +183,45 @@ nonisolated enum SMBLibraryScanner {
         return videoExtensions.contains(ext)
     }
 
-    // `- 07`, `S01E07`, `Ep07`, `[07]`. MAY NEED ADJUSTING
+    //`S01E07`, `Ep07`, `- 07`, `[07]`, and finally a bare `07`. MAY NEED ADJUSTING
     static func parseEpisodeNumber(from fileName: String) -> Int? {
         let stem = (fileName as NSString).deletingPathExtension
-        let patterns = [
+
+        let explicit = [
             #"[Ss](\d{1,2})[Ee](\d{1,3})"#,
             #"(?:^|[\s._-])[Ee][Pp]?[\s._-]?(\d{1,3})(?:[\s._-]|$)"#,
             #"[\s._]-[\s._](\d{1,3})(?:[\s._v]|$)"#,
-            #"(?:^|[\s._])(\d{1,3})(?:[\s._]|$)"#,
+            #"[\[\(](\d{1,3})[\]\)]"#,
         ]
-
-        for pattern in patterns {
-            guard let regex = try? NSRegularExpression(pattern: pattern),
-                  let match = regex.firstMatch(
-                      in: stem,
-                      range: NSRange(stem.startIndex..., in: stem)
-                  ) else { continue }
-            let group = match.numberOfRanges - 1
-            guard let range = Range(match.range(at: group), in: stem),
-                  let value = Int(stem[range]) else { continue }
-            return value
+        for pattern in explicit {
+            if let value = firstNumber(in: stem, pattern: pattern) { return value }
         }
 
-        return nil
+        return firstNumber(
+            in: withoutMetadata(stem),
+            pattern: #"(?:^|[\s._])(\d{1,3})(?:[\s._]|$)"#
+        )
     }
 
-    // MARK: - Paths
+    private static func withoutMetadata(_ stem: String) -> String {
+        stem.replacingOccurrences(
+            of: #"[\[\(][^\]\)]*[\]\)]"#,
+            with: " ",
+            options: .regularExpression
+        )
+    }
+
+    private static func firstNumber(in text: String, pattern: String) -> Int? {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(
+                  in: text,
+                  range: NSRange(text.startIndex..., in: text)
+              ) else { return nil }
+        let group = match.numberOfRanges - 1
+        guard let range = Range(match.range(at: group), in: text) else { return nil }
+        return Int(text[range])
+    }
+
 
     private static func normalized(_ path: String) -> String {
         path

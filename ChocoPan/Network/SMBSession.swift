@@ -6,6 +6,8 @@ enum SMBSessionError: Error, CustomStringConvertible {
     case missingFileSize(String)
     case unknownToken(Int)
     case noShareSelected
+    case missingHost(String)
+    case missingCredential(String)
 
     var description: String {
         switch self {
@@ -13,11 +15,13 @@ enum SMBSessionError: Error, CustomStringConvertible {
         case .missingFileSize(let path): "no file size for \(path)"
         case .unknownToken(let token): "unknown stream token \(token)"
         case .noShareSelected: "no share selected"
+        case .missingHost(let name): "\(name) has no server address"
+        case .missingCredential(let name): "no saved password for \(name)"
         }
     }
 }
 
-final class SMBSession: @unchecked Sendable {
+nonisolated final class SMBSession: @unchecked Sendable {
     struct Entry {
         let path: String
         let size: Int64
@@ -65,7 +69,6 @@ final class SMBSession: @unchecked Sendable {
         lock.withLock { connectedShare = share }
     }
 
-    /// Re-establishes the tree connect if it has gone away. Cheap when healthy (one echo).
     func ensureConnected() async throws {
         guard let share = lock.withLock({ connectedShare }) else {
             throw SMBSessionError.noShareSelected
@@ -89,19 +92,22 @@ final class SMBSession: @unchecked Sendable {
     }
 
 
-    func prepare(path: String) async throws -> Int {
+    func fileSize(path: String) async throws -> Int64 {
         try await ensureConnected()
 
         let attributes = try await client.attributesOfItem(atPath: path)
         let raw = attributes[.fileSizeKey]
-        let size: Int64
         if let number = raw as? NSNumber {
-            size = number.int64Value
-        } else if let value = raw as? Int {
-            size = Int64(value)
-        } else {
-            throw SMBSessionError.missingFileSize(path)
+            return number.int64Value
         }
+        if let value = raw as? Int {
+            return Int64(value)
+        }
+        throw SMBSessionError.missingFileSize(path)
+    }
+
+    func prepare(path: String) async throws -> Int {
+        let size = try await fileSize(path: path)
 
         return lock.withLock {
             let token = nextToken
@@ -175,4 +181,26 @@ final class SMBSession: @unchecked Sendable {
 
 nonisolated private final class ReadBox: @unchecked Sendable {
     var data: Data?
+}
+
+
+extension SMBSession {
+    @MainActor
+    static func make(
+        for source: LibrarySource,
+        timeout: TimeInterval = SMBSession.streamTimeout
+    ) throws -> SMBSession {
+        guard let host = source.host, !host.isEmpty else {
+            throw SMBSessionError.missingHost(source.name)
+        }
+        guard let password = SMBCredentialStore.password(for: source.keychainAccount) else {
+            throw SMBSessionError.missingCredential(source.name)
+        }
+        return try SMBSession(
+            host: host,
+            username: source.username,
+            password: password,
+            timeout: timeout
+        )
+    }
 }
